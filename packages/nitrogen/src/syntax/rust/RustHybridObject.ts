@@ -295,7 +295,8 @@ function generatePropsStruct(
     .map((p) => {
       const fieldName = toSnakeCase(p.name)
       const propName = p.name
-      return `        obj.set(prop!("${propName}", rt), &self.${fieldName}.into_value(rt), rt);`
+      const fieldAccess = p.type.kind === 'string' ? `self.${fieldName}.clone()` : `self.${fieldName}`
+      return `        obj.set(prop!("${propName}", rt), &${fieldAccess}.into_value(rt), rt);`
     })
     .join('\n')
 
