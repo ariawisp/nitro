@@ -51,6 +51,8 @@ export class StructType implements Type {
         return this.structName
       case 'kotlin':
         return this.structName
+      case 'rust':
+        return this.structName
       default:
         throw new Error(
           `Language ${language} is not yet supported for StructType!`

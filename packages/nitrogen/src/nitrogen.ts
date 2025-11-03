@@ -26,6 +26,7 @@ import type { Autolinking } from './autolinking/Autolinking.js'
 import { createGitAttributes } from './createGitAttributes.js'
 import type { PlatformSpec } from 'react-native-nitro-modules'
 import { NITROGEN_VERSION } from './config/nitrogenVersion.js'
+import { createRustCrateScaffold } from './syntax/rust/RustHybridObject.js'
 
 interface NitrogenOptions {
   baseDirectory: string
@@ -193,6 +194,21 @@ export async function runNitrogen({
   }
 
   // Autolinking
+  const rustCrateFiles = createRustCrateScaffold()
+  if (rustCrateFiles.length > 0) {
+    Logger.info('🦀  Preparing Rust crate scaffold...')
+    for (const file of rustCrateFiles) {
+      const basePath = path.join(
+        outputDirectory,
+        file.platform,
+        file.language
+      )
+      const actualPath = await writeFile(basePath, file)
+      filesAfter.push(actualPath)
+      writtenFiles.push(file)
+    }
+  }
+
   Logger.info(`⛓️   Setting up build configs for autolinking...`)
 
   const autolinkingFiles: Autolinking[] = []

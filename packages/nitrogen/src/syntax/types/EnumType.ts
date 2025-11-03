@@ -101,6 +101,8 @@ export class EnumType implements Type {
         return this.enumName
       case 'kotlin':
         return this.enumName
+      case 'rust':
+        return this.enumName
       default:
         throw new Error(
           `Language ${language} is not yet supported for NumberType!`

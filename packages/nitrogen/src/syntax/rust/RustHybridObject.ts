@@ -2,6 +2,15 @@ import type { SourceFile } from '../SourceFile.js'
 import { createFileMetadataString } from '../helpers.js'
 import type { HybridObjectSpec } from '../HybridObjectSpec.js'
 import type { Property } from '../Property.js'
+import type { Method } from '../Method.js'
+import { OptionalType } from '../types/OptionalType.js'
+import { getTypeAs } from '../types/getTypeAs.js'
+import { EnumType } from '../types/EnumType.js'
+import { VariantType } from '../types/VariantType.js'
+import { FunctionType } from '../types/FunctionType.js'
+import { StructType } from '../types/StructType.js'
+import { NamedWrappingType } from '../types/NamedWrappingType.js'
+import type { NamedType, Type } from '../types/Type.js'
 
 /**
  * Converts a camelCase or PascalCase string to snake_case
@@ -11,6 +20,144 @@ function toSnakeCase(str: string): string {
     .replace(/([A-Z])/g, '_$1')
     .toLowerCase()
     .replace(/^_/, '')
+}
+
+function toPascalCase(str: string): string {
+  const normalized = str
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .split('_')
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment[0]!.toUpperCase() + segment.slice(1).toLowerCase())
+    .join('')
+  if (normalized.length === 0) {
+    return 'Generated'
+  }
+  if (/^[0-9]/.test(normalized)) {
+    return `_${normalized}`
+  }
+  return normalized
+}
+
+type EnumCandidate = EnumType | VariantType
+
+const rustModuleRegistry = new Set<string>()
+
+function unwrapOptional(type: Type): Type {
+  if (type.kind === 'optional') {
+    const optional = getTypeAs(type, OptionalType)
+    return unwrapOptional(optional.wrappingType)
+  }
+  return type
+}
+
+function getEnumCandidate(type: Type): EnumCandidate | undefined {
+  const concrete = unwrapOptional(type)
+  if (concrete instanceof EnumType) {
+    return concrete
+  }
+  if (concrete instanceof VariantType) {
+    return concrete
+  }
+  return undefined
+}
+
+function getRustTypeName(type: EnumCandidate): string {
+  if (type instanceof EnumType) {
+    return type.enumName
+  }
+  if (type.aliasName != null) {
+    return toPascalCase(type.aliasName)
+  }
+  const alias = type.getAliasName('swift')
+  return toPascalCase(alias)
+}
+
+function getRustTypeCode(type: Type): string {
+  try {
+    return type.getCode('rust')
+  } catch (error) {
+    const concrete = unwrapOptional(type)
+    if (concrete instanceof EnumType) {
+      return concrete.enumName
+    }
+    if (concrete instanceof StructType) {
+      return concrete.structName
+    }
+    throw new Error(
+      `Rust codegen does not yet support converting type "${concrete.kind}" to Rust.\n` +
+        `Encountered while generating Rust type code.`
+    )
+  }
+}
+
+function getUnderlyingType(named: NamedType): Type {
+  if (named instanceof NamedWrappingType) {
+    return named.type
+  }
+  return named
+}
+
+function registerRustModule(file: SourceFile): void {
+  if (file.language !== 'rust') return
+  if (file.platform !== 'shared') return
+  if (!file.name.endsWith('.rs')) return
+  if (file.subdirectory[0] === 'crate') return
+  const segments = [...file.subdirectory, file.name]
+  const relativePath = segments.filter((segment) => segment.length > 0).join('/')
+  rustModuleRegistry.add(relativePath)
+}
+
+export function createRustCrateScaffold(): SourceFile[] {
+  if (rustModuleRegistry.size === 0) return []
+
+  const modules = Array.from(rustModuleRegistry).sort()
+
+  const cargoToml = `${createFileMetadataString('Cargo.toml', '#')}
+
+[package]
+name = "nitrogen_generated"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1"
+# Update the path below to point at your local jsi crate.
+# jsi = { path = "../../path/to/jsi-rs/jsi" }
+`
+
+  const includeStatements = modules
+    .map(
+      (modulePath) =>
+        `include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../${modulePath}"));`
+    )
+    .join('\n')
+
+  const libRs = `${createFileMetadataString('lib.rs')}
+
+#![allow(clippy::all)]
+#![allow(dead_code)]
+
+${includeStatements}
+`
+
+  return [
+    {
+      platform: 'shared',
+      language: 'rust',
+      subdirectory: ['crate'],
+      name: 'Cargo.toml',
+      content: cargoToml,
+    },
+    {
+      platform: 'shared',
+      language: 'rust',
+      subdirectory: ['crate', 'src'],
+      name: 'lib.rs',
+      content: libRs,
+    },
+  ]
 }
 
 /**
@@ -28,20 +175,37 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
     (p) => p.type.kind !== 'function'
   )
   if (nonCallbackProps.length > 0) {
-    files.push(generatePropsStruct(spec, nonCallbackProps))
+    const propsFile = generatePropsStruct(spec, nonCallbackProps)
+    registerRustModule(propsFile)
+    files.push(propsFile)
   }
 
   // Generate enums from union/variant types
   const enumTypes = collectEnumTypes(spec)
   for (const enumType of enumTypes) {
-    files.push(generateEnum(enumType))
+    const enumFile = generateEnum(enumType)
+    if (enumFile != null) {
+      registerRustModule(enumFile)
+      files.push(enumFile)
+    }
   }
 
   // Generate event structs from callbacks
   const callbackProps = spec.properties.filter((p) => p.type.kind === 'function')
   for (const callback of callbackProps) {
-    files.push(generateEventStruct(spec, callback))
+    const eventFile = generateEventStruct(spec, callback)
+    registerRustModule(eventFile)
+    files.push(eventFile)
   }
+
+  const hybridFile = generateHybridObjectImpl(
+    spec,
+    nonCallbackProps,
+    callbackProps,
+    spec.methods
+  )
+  registerRustModule(hybridFile)
+  files.push(hybridFile)
 
   return files
 }
@@ -49,37 +213,33 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
 /**
  * Collects all enum/variant types from the spec
  */
-function collectEnumTypes(spec: HybridObjectSpec): any[] {
-  const enums: any[] = []
+function collectEnumTypes(spec: HybridObjectSpec): Array<{
+  name: string
+  type: EnumCandidate
+}> {
+  const enums = new Map<string, EnumCandidate>()
 
-  // Collect from properties
-  for (const prop of spec.properties) {
-    if (prop.type.kind === 'enum' || prop.type.kind === 'variant') {
-      // Check if not already collected
-      if (!enums.some((e) => e.name === prop.type.getCode('rust'))) {
-        enums.push({
-          name: prop.type.getCode('rust'),
-          type: prop.type,
-        })
-      }
+  const register = (type: Type): void => {
+    const candidate = getEnumCandidate(type)
+    if (candidate == null) return
+    const name = getRustTypeName(candidate)
+    if (!enums.has(name)) {
+      enums.set(name, candidate)
     }
   }
 
-  // Collect from method parameters
+  for (const prop of spec.properties) {
+    register(prop.type)
+  }
+
   for (const method of spec.methods) {
     for (const param of method.parameters) {
-      if (param.type.kind === 'enum' || param.type.kind === 'variant') {
-        if (!enums.some((e) => e.name === param.type.getCode('rust'))) {
-          enums.push({
-            name: param.type.getCode('rust'),
-            type: param.type,
-          })
-        }
-      }
+      register(param.type)
     }
+    register(method.returnType)
   }
 
-  return enums
+  return Array.from(enums.entries()).map(([name, type]) => ({ name, type }))
 }
 
 /**
@@ -106,10 +266,21 @@ function generatePropsStruct(
       const fieldName = toSnakeCase(p.name)
       const propName = p.name
       const defaultValue = getDefaultValue(p)
-
-      return `            ${fieldName}: obj.get(prop!("${propName}", rt), rt)
-                .and_then(|v| FromValue::from_value(&v, rt))
-                .unwrap_or(${defaultValue}),`
+      if (p.type.kind === 'optional') {
+        return `            ${fieldName}: {
+                let value = obj.get(prop!("${propName}", rt), rt);
+                if value.is_undefined() || value.is_null() {
+                    ${defaultValue}
+                } else {
+                    FromValue::from_value(&value, rt).or(${defaultValue})
+                }
+            },`
+      }
+      return `            ${fieldName}: {
+                let value = obj.get(prop!("${propName}", rt), rt);
+                FromValue::from_value(&value, rt)
+                    .unwrap_or_else(|| ${defaultValue})
+            },`
     })
     .join('\n')
 
@@ -133,7 +304,7 @@ function generatePropsStruct(
 
   const code = `${createFileMetadataString(`${fileName}.rs`)}
 
-use jsi::{prop, FromValue, IntoValue, JsiObject, JsiValue, RuntimeHandle};
+use jsi::{prop, FromValue, IntoValue, JsiObject, RuntimeHandle};
 
 /// Props for ${spec.name}
 #[derive(Debug, Clone)]
@@ -143,14 +314,14 @@ ${fields}
 
 impl ${structName} {
     /// Parse from a JavaScript object
-    pub fn from_js_object(obj: &JsiObject, rt: &mut RuntimeHandle) -> anyhow::Result<Self> {
+    pub fn from_js_object<'rt>(obj: &JsiObject<'rt>, rt: &mut RuntimeHandle<'rt>) -> anyhow::Result<Self> {
         Ok(Self {
 ${parsers}
         })
     }
 
     /// Convert to a JavaScript object
-    pub fn to_js_object(&self, rt: &mut RuntimeHandle) -> JsiObject {
+    pub fn to_js_object<'rt>(&self, rt: &mut RuntimeHandle<'rt>) -> JsiObject<'rt> {
         let mut obj = JsiObject::new(rt);
 ${serializers}
         obj
@@ -178,31 +349,46 @@ ${defaults}
 /**
  * Generates an enum from a variant/union type
  */
-function generateEnum(enumDef: any): SourceFile {
-  const enumName = enumDef.name
+function generateEnum(enumDef: {
+  name: string
+  type: EnumCandidate
+}): SourceFile | null {
+  if (enumDef.type instanceof EnumType) {
+    if (enumDef.type.jsType === 'union') {
+      return generateStringEnum(enumDef.name, enumDef.type)
+    } else {
+      return generateNumericEnum(enumDef.name, enumDef.type)
+    }
+  }
+
+  // TODO: Add Rust generation for VariantType
+  return null
+}
+
+function generateStringEnum(enumName: string, enumType: EnumType): SourceFile {
   const fileName = toSnakeCase(enumName)
+  const variantUsage = new Map<string, number>()
+  const variants = enumType.enumMembers.map((member, index) => {
+    const literal = member.stringValue ?? member.name.toLowerCase()
+    const baseName = toPascalCase(member.stringValue ?? member.name ?? `Variant${index}`)
+    const count = variantUsage.get(baseName) ?? 0
+    variantUsage.set(baseName, count + 1)
+    const rustName = count === 0 ? baseName : `${baseName}${count + 1}`
+    return { rustName, literal }
+  })
 
-  // Get variant names from the type
-  // This is a simplified version - actual implementation would need to inspect the type
-  const variants = ['Primary', 'Secondary', 'Ghost', 'Danger'] // Placeholder
-
-  const variantDecls = variants.map((v) => `    ${v},`).join('\n')
-
+  const variantDecls = variants.map((v) => `    ${v.rustName},`).join('\n')
   const fromStrCases = variants
-    .map((v) => {
-      const literal = v.toLowerCase()
-      return `            "${literal}" => Some(Self::${v}),`
-    })
+    .map((v) => `            "${v.literal}" => Some(Self::${v.rustName}),`)
     .join('\n')
-
   const asStrCases = variants
-    .map((v) => {
-      const literal = v.toLowerCase()
-      return `            Self::${v} => "${literal}",`
-    })
+    .map((v) => `            Self::${v.rustName} => "${v.literal}",`)
     .join('\n')
+  const defaultVariant = variants[0]?.rustName ?? 'Generated'
 
   const code = `${createFileMetadataString(`${fileName}.rs`)}
+
+use jsi::{FromValue, IntoValue, JsiValue, RuntimeHandle};
 
 /// ${enumName} enum generated from TypeScript union type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,8 +397,8 @@ ${variantDecls}
 }
 
 impl ${enumName} {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
 ${fromStrCases}
             _ => None,
         }
@@ -225,15 +411,97 @@ ${asStrCases}
     }
 }
 
-impl From<&str> for ${enumName} {
-    fn from(s: &str) -> Self {
-        Self::from_str(s).unwrap_or_default()
+impl<'rt> FromValue<'rt> for ${enumName} {
+    fn from_value(value: &JsiValue<'rt>, rt: &mut RuntimeHandle<'rt>) -> Option<Self> {
+        let text: Option<String> = FromValue::from_value(value, rt);
+        text.as_deref().and_then(Self::from_str)
+    }
+}
+
+impl<'rt> IntoValue<'rt> for ${enumName} {
+    fn into_value(self, rt: &mut RuntimeHandle<'rt>) -> JsiValue<'rt> {
+        self.as_str().into_value(rt)
     }
 }
 
 impl Default for ${enumName} {
     fn default() -> Self {
-        Self::${variants[0]}
+        Self::${defaultVariant}
+    }
+}
+`
+
+  return {
+    name: `${fileName}.rs`,
+    content: code,
+    language: 'rust',
+    platform: 'shared',
+    subdirectory: [],
+  }
+}
+
+function generateNumericEnum(enumName: string, enumType: EnumType): SourceFile {
+  const fileName = toSnakeCase(enumName)
+  const variantUsage = new Map<string, number>()
+  const variants = enumType.enumMembers.map((member, index) => {
+    const baseName = toPascalCase(member.stringValue ?? member.name ?? `Variant${index}`)
+    const count = variantUsage.get(baseName) ?? 0
+    variantUsage.set(baseName, count + 1)
+    const rustName = count === 0 ? baseName : `${baseName}${count + 1}`
+    return { rustName, value: member.value }
+  })
+
+  const variantDecls = variants.map((v) => `    ${v.rustName} = ${v.value},`).join('\n')
+  const fromNumberCases = variants
+    .map((v) => `            ${v.value} => Some(Self::${v.rustName}),`)
+    .join('\n')
+  const toNumberCases = variants
+    .map((v) => `            Self::${v.rustName} => ${v.value},`)
+    .join('\n')
+  const defaultVariant = variants[0]?.rustName ?? 'Generated'
+
+  const code = `${createFileMetadataString(`${fileName}.rs`)}
+
+use jsi::{FromValue, IntoValue, JsiValue, RuntimeHandle};
+
+/// ${enumName} enum generated from TypeScript numeric enum
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ${enumName} {
+${variantDecls}
+}
+
+impl ${enumName} {
+    pub fn from_i32(value: i32) -> Option<Self> {
+        match value {
+${fromNumberCases}
+            _ => None,
+        }
+    }
+
+    pub fn as_i32(&self) -> i32 {
+        match self {
+${toNumberCases}
+        }
+    }
+}
+
+impl<'rt> FromValue<'rt> for ${enumName} {
+    fn from_value(value: &JsiValue<'rt>, rt: &mut RuntimeHandle<'rt>) -> Option<Self> {
+        let raw: Option<f64> = FromValue::from_value(value, rt);
+        raw.and_then(|num| Self::from_i32(num as i32))
+    }
+}
+
+impl<'rt> IntoValue<'rt> for ${enumName} {
+    fn into_value(self, rt: &mut RuntimeHandle<'rt>) -> JsiValue<'rt> {
+        self.as_i32().into_value(rt)
+    }
+}
+
+impl Default for ${enumName} {
+    fn default() -> Self {
+        Self::${defaultVariant}
     }
 }
 `
@@ -255,24 +523,70 @@ function generateEventStruct(
   callback: Property
 ): SourceFile {
   // Extract event name from callback name: onPress -> PressEvent
-  const eventName = callback.name.replace(/^on/, '') + 'Event'
+  const eventName = `${toPascalCase(callback.name.replace(/^on/, ''))}Event`
   const fileName = toSnakeCase(eventName)
 
-  // Simplified: assume callback has a single parameter that's an object
-  // Real implementation would inspect the function signature
-  const fields = [
-    '    pub timestamp: u64,',
-    '    pub with_modifier: bool,',
-  ].join('\n')
+  if (!(callback.type instanceof FunctionType)) {
+    throw new Error(
+      `Expected callback property ${callback.name} to be a FunctionType when generating Rust events.`
+    )
+  }
 
-  const toJsFields = [
-    '        obj.set(prop!("timestamp", rt), &JsiValue::new_number(self.timestamp as f64), rt);',
-    '        obj.set(prop!("withModifier", rt), &self.with_modifier.into_value(rt), rt);',
-  ].join('\n')
+  const fnType = callback.type
+
+  interface EventField {
+    fieldName: string
+    jsName: string
+    rustType: string
+  }
+
+  const eventFields: EventField[] = []
+
+  const pushField = (name: string, type: NamedType): void => {
+    const rustType = getRustTypeCode(type)
+    eventFields.push({
+      fieldName: toSnakeCase(name),
+      jsName: name,
+      rustType,
+    })
+  }
+
+  if (fnType.parameters.length === 1) {
+    const parameter = fnType.parameters[0]
+    const underlying = unwrapOptional(getUnderlyingType(parameter))
+    if (underlying instanceof StructType) {
+      for (const structProp of underlying.properties) {
+        pushField(structProp.name, structProp)
+      }
+    } else {
+      pushField(parameter.name, parameter)
+    }
+  } else {
+    for (const parameter of fnType.parameters) {
+      pushField(parameter.name, parameter)
+    }
+  }
+
+  const fields =
+    eventFields.length === 0
+      ? ''
+      : eventFields
+          .map((field) => `    pub ${field.fieldName}: ${field.rustType},`)
+          .join('\n')
+
+  const toJsFields =
+    eventFields.length === 0
+      ? ''
+      : eventFields
+          .map(
+            (field) =>
+              `        obj.set(prop!("${field.jsName}", rt), &self.${field.fieldName}.into_value(rt), rt);`
+          )
+          .join('\n')
 
   const code = `${createFileMetadataString(`${fileName}.rs`)}
 
-use jsi::{prop, IntoValue, JsiObject, JsiValue, RuntimeHandle};
+use jsi::{prop, IntoValue, JsiObject, RuntimeHandle};
 
 /// Event data for ${callback.name} callback
 #[derive(Debug, Clone)]
@@ -282,7 +596,114 @@ ${fields}
 
 impl ${eventName} {
     /// Convert to a JavaScript object for passing to callbacks
-    pub fn to_js_object(&self, rt: &mut RuntimeHandle) -> JsiObject {
+    pub fn to_js_object<'rt>(&self, rt: &mut RuntimeHandle<'rt>) -> JsiObject<'rt> {
+        let mut obj = JsiObject::new(rt);
+${toJsFields}
+        obj
+    }
+}
+`
+
+  return {
+    name: `${fileName}.rs`,
+    content: code,
+    language: 'rust',
+    platform: 'shared',
+    subdirectory: [],
+  }
+}
+
+function generateHybridObjectImpl(
+  spec: HybridObjectSpec,
+  properties: Property[],
+  callbacks: Property[],
+  methods: Method[]
+): SourceFile {
+  const implType = spec.name
+  const fileName = `${toSnakeCase(spec.name)}_hybrid`
+  const propsStructName = `${spec.name}Props`
+  const hasProps = properties.length > 0
+  const hasCallbacks = callbacks.length > 0
+
+  const setPropsBody = hasProps
+    ? `        if let Some(props_obj) = JsiObject::from_value(&props, rt) {
+            match ${propsStructName}::from_js_object(&props_obj, rt) {
+                Ok(parsed_props) => {
+                    // TODO: apply parsed props to your native state
+                    let _ = parsed_props;
+                }
+                Err(err) => {
+                    // TODO: surface parsing error (log, metrics, etc.)
+                    let _ = err;
+                }
+            }
+        } else {
+            // TODO: handle non-object props payloads if needed
+        }
+`
+    : '        let _ = (rt, props);
+'
+
+  const callbackComment = hasCallbacks
+    ? '        // TODO: register callback props (e.g., store JsiFn handles)\n'
+    : ''
+
+  const methodStubs = methods
+    .map((method) => generateHybridMethodStub(method))
+    .filter((stub) => stub.length > 0)
+    .join('\n\n')
+
+  const code = `${createFileMetadataString(`${fileName}.rs`)}
+
+use jsi::{hybrid_method, hybrid_object, JsiObject, JsiValue, RuntimeHandle};
+
+#[hybrid_object("${spec.name}")]
+impl ${implType} {
+    /// Update native state from the latest JS props snapshot.
+    #[hybrid_method]
+    pub fn set_props<'rt>(&self, rt: &mut RuntimeHandle<'rt>, props: JsiValue<'rt>) {
+${setPropsBody}${callbackComment}
+    }
+
+${methodStubs}
+}
+`
+
+  return {
+    name: `${fileName}.rs`,
+    content: code,
+    language: 'rust',
+    platform: 'shared',
+    subdirectory: [],
+  }
+}
+
+function generateHybridMethodStub(method: Method): string {
+  const methodName = toSnakeCase(method.name)
+  const params = method.parameters.map((param) => {
+    const paramName = toSnakeCase(param.name)
+    return `${paramName}: JsiValue<'rt>`
+  })
+  const paramsSignature = params.length > 0 ? `, ${params.join(', ')}` : ''
+  const parameterNames = method.parameters.map((param) => toSnakeCase(param.name))
+  const bindingTuple = `rt${parameterNames.map((name) => `, ${name}`).join('')}`
+  const bindingLine = `        let _ = (${bindingTuple});`
+  const returnType = method.returnType.kind === 'void' ? '()' : "JsiValue<'rt>"
+
+  const body =
+    method.returnType.kind === 'void'
+      ? `${bindingLine}\n        todo!("Implement ${method.name}()");`
+      : `${bindingLine}\n        todo!("Implement ${method.name}()");`
+
+  return `    #[hybrid_method]
+    pub fn ${methodName}<'rt>(&self, rt: &mut RuntimeHandle<'rt>${paramsSignature}) -> ${returnType} {
+${body}
+    }`
+}
+
+impl ${eventName} {
+    /// Convert to a JavaScript object for passing to callbacks
+    pub fn to_js_object<'rt>(&self, rt: &mut RuntimeHandle<'rt>) -> JsiObject<'rt> {
         let mut obj = JsiObject::new(rt);
 ${toJsFields}
         obj
