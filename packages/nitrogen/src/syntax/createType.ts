@@ -124,6 +124,7 @@ const knownTypes: Record<Language, Map<TypeId, Type>> = {
   'c++': new Map<TypeId, Type>(),
   'swift': new Map<TypeId, Type>(),
   'kotlin': new Map<TypeId, Type>(),
+  'rust': new Map<TypeId, Type>(),
 }
 
 /**

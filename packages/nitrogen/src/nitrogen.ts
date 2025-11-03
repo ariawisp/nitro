@@ -132,20 +132,19 @@ export async function runNitrogen({
         )
 
         // Create all files and throw it into a big list
-        let allFiles = platforms.flatMap((p) => {
-          usedPlatforms.push(p)
-          const language = platformSpec[p]!
-          const r = generatePlatformFiles(declaration.getType(), language)
-          return r
+        let allFiles = platforms.flatMap((platform) => {
+          usedPlatforms.push(platform)
+          const language = platformSpec[platform]!
+          return generatePlatformFiles(declaration.getType(), language)
         })
         allFiles = deduplicateFiles(allFiles)
         // Group the files by platform ({ ios: [], android: [], shared: [] })
         const filesPerPlatform = groupByPlatform(allFiles)
         // Loop through each platform one by one so that it has some kind of order (per-platform)
-        for (const [p, files] of Object.entries(filesPerPlatform)) {
-          const platform = p as SourceFile['platform']
+        for (const [platformKey, files] of Object.entries(filesPerPlatform)) {
+          const platform = platformKey as SourceFile['platform']
           const language =
-            platform === 'shared' ? 'c++' : platformSpec[platform]
+            platform === 'shared' ? 'c++' : platformSpec[platform as Platform]
           if (language == null) {
             // if the language was never specified in the spec, skip it
             continue
@@ -162,8 +161,8 @@ export async function runNitrogen({
           for (const file of files) {
             const basePath = path.join(
               outputDirectory,
-              file.platform,
-              file.language
+              String(file.platform),
+              String(file.language)
             )
             const actualPath = await writeFile(basePath, file)
             filesAfter.push(actualPath)
@@ -198,11 +197,7 @@ export async function runNitrogen({
   if (rustCrateFiles.length > 0) {
     Logger.info('🦀  Preparing Rust crate scaffold...')
     for (const file of rustCrateFiles) {
-      const basePath = path.join(
-        outputDirectory,
-        file.platform,
-        file.language
-      )
+      const basePath = path.join(outputDirectory, file.platform, file.language)
       const actualPath = await writeFile(basePath, file)
       filesAfter.push(actualPath)
       writtenFiles.push(file)

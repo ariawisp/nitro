@@ -9,6 +9,11 @@
     "outDir": "lib",
     "types": ["node"],
     "module": "NodeNext",
-    "moduleResolution": "NodeNext"
+    "moduleResolution": "NodeNext",
+    "baseUrl": "./",
+    "paths": {
+      "react-native-nitro-modules": ["../react-native-nitro-modules/lib/typescript/index.d.ts"],
+      "react-native-nitro-modules/*": ["../react-native-nitro-modules/lib/typescript/*"]
+    }
   }
 }

@@ -3,25 +3,25 @@ import type { InterfaceDeclaration, Type, TypeAliasDeclaration } from 'ts-morph'
 import { Node, Symbol } from 'ts-morph'
 import { getBaseTypes } from './utils.js'
 
-export type Platform = keyof Required<PlatformSpec>
-export type Language = Required<PlatformSpec>[keyof PlatformSpec]
-
-const platformLanguages: { [K in Platform]: Language[] } = {
+const platformLanguages = {
   ios: ['swift', 'c++', 'rust'],
   android: ['kotlin', 'c++', 'rust'],
-}
+} as const
+
+export type Platform = keyof typeof platformLanguages
+export type Language = (typeof platformLanguages)[Platform][number]
 const allPlatforms = Object.keys(platformLanguages) as Platform[]
 const allLanguages = Object.values(platformLanguages).flatMap((l) => l)
 
 function isValidLanguage(language: string | undefined): language is Language {
-  if (language == null) {
-    return false
-  }
-  return allLanguages.includes(language as Language)
+  return (
+    typeof language === 'string' &&
+    (allLanguages as readonly string[]).includes(language)
+  )
 }
 
 function isValidPlatform(platform: string): platform is Platform {
-  return allPlatforms.includes(platform as Platform)
+  return (allPlatforms as readonly string[]).includes(platform)
 }
 
 function getLiteralValue(symbol: Symbol): string | undefined {
@@ -41,44 +41,48 @@ function getLiteralValue(symbol: Symbol): string | undefined {
 function isValidLanguageForPlatform(
   language: Language,
   platform: Platform
-): language is Required<PlatformSpec>[typeof platform] {
-  return platformLanguages[platform].includes(language)
+): boolean {
+  const allowed = platformLanguages[platform] as readonly Language[]
+  return allowed.includes(language)
 }
 
 function getPlatformSpec(typeName: string, platformSpecs: Type): PlatformSpec {
-  const result: PlatformSpec = {}
+  const result: PlatformSpec = {} as PlatformSpec
 
   // Properties (ios, android)
   const properties = platformSpecs.getProperties()
   for (const property of properties) {
     // Property name (ios, android)
-    const platform = property.getName()
-    if (!isValidPlatform(platform)) {
+    const platformName = property.getName()
+    if (!isValidPlatform(platformName)) {
       throw new Error(
-        `${typeName} does not properly extend HybridObject<T> - "${platform}" is not a valid Platform! ` +
+        `${typeName} does not properly extend HybridObject<T> - "${platformName}" is not a valid Platform! ` +
           `Valid platforms are: [${allPlatforms.join(', ')}]`
       )
     }
+    const platform = platformName as Platform
 
     // Value (swift, kotlin, c++)
-    const language = getLiteralValue(property)
-    if (!isValidLanguage(language)) {
+    const languageValue = getLiteralValue(property)
+    if (!isValidLanguage(languageValue)) {
+      const allowed = platformLanguages[platform] as readonly Language[]
       throw new Error(
-        `${typeName}: Language ${language} is not a valid language for ${platform}! ` +
-          `Valid languages are: [${platformLanguages[platform].join(', ')}]`
+        `${typeName}: Language ${languageValue} is not a valid language for ${platform}! ` +
+          `Valid languages are: [${allowed.join(', ')}]`
       )
     }
+    const language: Language = languageValue
 
     // Double-check that language works on this platform (android: kotlin/c++, ios: swift/c++)
     if (!isValidLanguageForPlatform(language, platform)) {
+      const allowed = platformLanguages[platform] as readonly Language[]
       throw new Error(
         `${typeName}: Language ${language} is not a valid language for ${platform}! ` +
-          `Valid languages are: [${platformLanguages[platform].join(', ')}]`
+          `Valid languages are: [${allowed.join(', ')}]`
       )
     }
 
-    // @ts-expect-error because TypeScript isn't smart enough yet to correctly cast after the `isValidLanguageForPlatform` check.
-    result[platform] = language
+    ;(result as Record<Platform, Language>)[platform] = language
   }
 
   return result

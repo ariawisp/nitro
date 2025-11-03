@@ -167,8 +167,8 @@ export function getRelativeDirectory(file: SourceFile): string {
     '..',
     'nitrogen',
     'generated',
-    file.platform,
-    file.language,
+    String(file.platform),
+    String(file.language),
     ...file.subdirectory,
     file.name
   )

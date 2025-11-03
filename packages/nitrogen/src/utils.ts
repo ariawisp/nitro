@@ -69,8 +69,8 @@ export function unsafeFastJoin(...segments: string[]): string {
 
 function getFullPath(file: SourceFile): string {
   return unsafeFastJoin(
-    file.platform,
-    file.language,
+    String(file.platform),
+    String(file.language),
     ...file.subdirectory,
     file.name
   )

@@ -28,7 +28,9 @@ function toPascalCase(str: string): string {
     .replace(/[^a-zA-Z0-9]+/g, '_')
     .split('_')
     .filter((segment) => segment.length > 0)
-    .map((segment) => segment[0]!.toUpperCase() + segment.slice(1).toLowerCase())
+    .map(
+      (segment) => segment[0]!.toUpperCase() + segment.slice(1).toLowerCase()
+    )
     .join('')
   if (normalized.length === 0) {
     return 'Generated'
@@ -76,7 +78,7 @@ function getRustTypeName(type: EnumCandidate): string {
 function getRustTypeCode(type: Type): string {
   try {
     return type.getCode('rust')
-  } catch (error) {
+  } catch {
     const concrete = unwrapOptional(type)
     if (concrete instanceof EnumType) {
       return concrete.enumName
@@ -104,7 +106,9 @@ function registerRustModule(file: SourceFile): void {
   if (!file.name.endsWith('.rs')) return
   if (file.subdirectory[0] === 'crate') return
   const segments = [...file.subdirectory, file.name]
-  const relativePath = segments.filter((segment) => segment.length > 0).join('/')
+  const relativePath = segments
+    .filter((segment) => segment.length > 0)
+    .join('/')
   rustModuleRegistry.add(relativePath)
 }
 
@@ -191,7 +195,9 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
   }
 
   // Generate event structs from callbacks
-  const callbackProps = spec.properties.filter((p) => p.type.kind === 'function')
+  const callbackProps = spec.properties.filter(
+    (p) => p.type.kind === 'function'
+  )
   for (const callback of callbackProps) {
     const eventFile = generateEventStruct(spec, callback)
     registerRustModule(eventFile)
@@ -359,10 +365,94 @@ function generateEnum(enumDef: {
     } else {
       return generateNumericEnum(enumDef.name, enumDef.type)
     }
+  } else if (enumDef.type instanceof VariantType) {
+    return generateVariantEnum(enumDef.name, enumDef.type)
   }
 
-  // TODO: Add Rust generation for VariantType
   return null
+}
+
+function generateVariantEnum(
+  enumName: string,
+  variantType: VariantType
+): SourceFile {
+  const fileName = toSnakeCase(enumName)
+  const variantUsage = new Map<string, number>()
+
+  const variants = variantType.cases.map(([label, type]) => {
+    const baseName = toPascalCase(label)
+    const count = variantUsage.get(baseName) ?? 0
+    variantUsage.set(baseName, count + 1)
+    const rustName = count === 0 ? baseName : `${baseName}${count + 1}`
+    const rustType = getRustTypeCode(type)
+    return { rustName, rustType }
+  })
+
+  const variantDecls = variants
+    .map((v) => `    ${v.rustName}(${v.rustType}),`)
+    .join('\n')
+
+  const fromBranches = variants
+    .map(
+      (v) =>
+        `        if let Some(parsed) = <${v.rustType} as FromValue<'rt>>::from_value(value, rt) {
+            return Some(Self::${v.rustName}(parsed));
+        }`
+    )
+    .join('\n')
+
+  const intoArms = variants
+    .map(
+      (v) => `            Self::${v.rustName}(value) => value.into_value(rt),`
+    )
+    .join('\n')
+
+  const defaultVariant = variants[0]
+
+  const defaultImpl = defaultVariant
+    ? `impl Default for ${enumName} {
+    fn default() -> Self {
+        Self::${defaultVariant.rustName}(Default::default())
+    }
+}
+
+`
+    : ''
+
+  const code = `${createFileMetadataString(`${fileName}.rs`)}
+
+use jsi::{FromValue, IntoValue, JsiValue, RuntimeHandle};
+
+/// ${enumName} enum generated from TypeScript variant type
+#[derive(Debug, Clone)]
+pub enum ${enumName} {
+${variantDecls}
+}
+
+impl<'rt> FromValue<'rt> for ${enumName} {
+    fn from_value(value: &JsiValue<'rt>, rt: &mut RuntimeHandle<'rt>) -> Option<Self> {
+${fromBranches}
+        None
+    }
+}
+
+impl<'rt> IntoValue<'rt> for ${enumName} {
+    fn into_value(self, rt: &mut RuntimeHandle<'rt>) -> JsiValue<'rt> {
+        match self {
+${intoArms}
+        }
+    }
+}
+
+${defaultImpl}`
+
+  return {
+    name: `${fileName}.rs`,
+    content: code,
+    language: 'rust',
+    platform: 'shared',
+    subdirectory: [],
+  }
 }
 
 function generateStringEnum(enumName: string, enumType: EnumType): SourceFile {
@@ -370,7 +460,9 @@ function generateStringEnum(enumName: string, enumType: EnumType): SourceFile {
   const variantUsage = new Map<string, number>()
   const variants = enumType.enumMembers.map((member, index) => {
     const literal = member.stringValue ?? member.name.toLowerCase()
-    const baseName = toPascalCase(member.stringValue ?? member.name ?? `Variant${index}`)
+    const baseName = toPascalCase(
+      member.stringValue ?? member.name ?? `Variant${index}`
+    )
     const count = variantUsage.get(baseName) ?? 0
     variantUsage.set(baseName, count + 1)
     const rustName = count === 0 ? baseName : `${baseName}${count + 1}`
@@ -444,14 +536,18 @@ function generateNumericEnum(enumName: string, enumType: EnumType): SourceFile {
   const fileName = toSnakeCase(enumName)
   const variantUsage = new Map<string, number>()
   const variants = enumType.enumMembers.map((member, index) => {
-    const baseName = toPascalCase(member.stringValue ?? member.name ?? `Variant${index}`)
+    const baseName = toPascalCase(
+      member.stringValue ?? member.name ?? `Variant${index}`
+    )
     const count = variantUsage.get(baseName) ?? 0
     variantUsage.set(baseName, count + 1)
     const rustName = count === 0 ? baseName : `${baseName}${count + 1}`
     return { rustName, value: member.value }
   })
 
-  const variantDecls = variants.map((v) => `    ${v.rustName} = ${v.value},`).join('\n')
+  const variantDecls = variants
+    .map((v) => `    ${v.rustName} = ${v.value},`)
+    .join('\n')
   const fromNumberCases = variants
     .map((v) => `            ${v.value} => Some(Self::${v.rustName}),`)
     .join('\n')
@@ -552,7 +648,7 @@ function generateEventStruct(
   }
 
   if (fnType.parameters.length === 1) {
-    const parameter = fnType.parameters[0]
+    const parameter = fnType.parameters[0]!
     const underlying = unwrapOptional(getUnderlyingType(parameter))
     if (underlying instanceof StructType) {
       for (const structProp of underlying.properties) {
@@ -641,8 +737,7 @@ function generateHybridObjectImpl(
             // TODO: handle non-object props payloads if needed
         }
 `
-    : '        let _ = (rt, props);
-'
+    : '        let _ = (rt, props);\n'
 
   const callbackComment = hasCallbacks
     ? '        // TODO: register callback props (e.g., store JsiFn handles)\n'
@@ -685,7 +780,9 @@ function generateHybridMethodStub(method: Method): string {
     return `${paramName}: JsiValue<'rt>`
   })
   const paramsSignature = params.length > 0 ? `, ${params.join(', ')}` : ''
-  const parameterNames = method.parameters.map((param) => toSnakeCase(param.name))
+  const parameterNames = method.parameters.map((param) =>
+    toSnakeCase(param.name)
+  )
   const bindingTuple = `rt${parameterNames.map((name) => `, ${name}`).join('')}`
   const bindingLine = `        let _ = (${bindingTuple});`
   const returnType = method.returnType.kind === 'void' ? '()' : "JsiValue<'rt>"
@@ -699,25 +796,6 @@ function generateHybridMethodStub(method: Method): string {
     pub fn ${methodName}<'rt>(&self, rt: &mut RuntimeHandle<'rt>${paramsSignature}) -> ${returnType} {
 ${body}
     }`
-}
-
-impl ${eventName} {
-    /// Convert to a JavaScript object for passing to callbacks
-    pub fn to_js_object<'rt>(&self, rt: &mut RuntimeHandle<'rt>) -> JsiObject<'rt> {
-        let mut obj = JsiObject::new(rt);
-${toJsFields}
-        obj
-    }
-}
-`
-
-  return {
-    name: `${fileName}.rs`,
-    content: code,
-    language: 'rust',
-    platform: 'shared',
-    subdirectory: [],
-  }
 }
 
 /**

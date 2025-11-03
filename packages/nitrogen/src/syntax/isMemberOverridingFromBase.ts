@@ -14,6 +14,7 @@ function getMemberNamesOfBaseType(language: Language): string[] {
       // Kotlin/JVM classes always extends `Any`, which has 3 methods
       return ['toString', 'equals', 'hashCode']
   }
+  return []
 }
 function getMemberNamesOfHybridObject(): string[] {
   type MemberName = keyof HybridObject<{}>
@@ -25,7 +26,7 @@ function getMemberNamesOfHybridObject(): string[] {
     name: true,
     toString: true,
   }
-  return Object.keys(allKeys)
+  return Object.keys(allKeys) as string[]
 }
 
 function flatBaseTypes(type: HybridObjectSpec): HybridObjectSpec[] {
