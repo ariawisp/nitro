@@ -20,6 +20,8 @@ export class BigIntType implements Type {
         return 'Int64'
       case 'kotlin':
         return 'Long'
+      case 'rust':
+        return 'i64'
       default:
         throw new Error(
           `Language ${language} is not yet supported for BigIntType!`

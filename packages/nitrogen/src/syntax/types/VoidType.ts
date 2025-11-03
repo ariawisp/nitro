@@ -19,6 +19,8 @@ export class VoidType implements Type {
         return 'Void'
       case 'kotlin':
         return 'Unit'
+      case 'rust':
+        return '()'
       default:
         throw new Error(
           `Language ${language} is not yet supported for VoidType!`
