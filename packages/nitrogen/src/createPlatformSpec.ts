@@ -7,6 +7,7 @@ import {
   isAnyHybridSubclass,
   isDirectlyHybridObject,
   type Language,
+  type Platform,
   isHybridViewProps,
   isHybridViewMethods,
 } from './getPlatformSpecs.js'
@@ -24,7 +25,8 @@ import { isMemberOverridingFromBase } from './syntax/isMemberOverridingFromBase.
 
 export function generatePlatformFiles(
   interfaceType: Type,
-  language: Language
+  language: Language,
+  platform: Platform
 ): SourceFile[] {
   const spec = getHybridObjectSpec(interfaceType, language)
 
@@ -41,7 +43,7 @@ export function generatePlatformFiles(
     case 'kotlin':
       return generateKotlinFiles(spec)
     case 'rust':
-      return generateRustFiles(spec)
+      return generateRustFiles(spec, platform)
     default:
       throw new Error(`Language "${language}" is not supported!`)
   }
@@ -194,7 +196,13 @@ function generateKotlinFiles(spec: HybridObjectSpec): SourceFile[] {
   return [...cppFiles, ...kotlinFiles]
 }
 
-function generateRustFiles(spec: HybridObjectSpec): SourceFile[] {
-  const rustFiles = createRustHybridObject(spec)
+function generateRustFiles(
+  spec: HybridObjectSpec,
+  platform: Platform
+): SourceFile[] {
+  if (platform !== 'gpui') {
+    throw new Error('Rust generation is only supported for the GPUI platform.')
+  }
+  const rustFiles = createRustHybridObject(spec, 'gpui')
   return rustFiles
 }

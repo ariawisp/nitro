@@ -101,6 +101,22 @@ export class NitroConfig {
     return [...ANDROID_BASE_NAMESPACE, ...userPackage, ...subPackage]
   }
 
+  getGpuiConfig(): NitroUserConfig['gpui'] | undefined {
+    return this.config.gpui
+  }
+
+  getGpuiOutputSubdirectory(): string[] {
+    const userSegments = this.config.gpui?.outputSubdirectory
+    if (userSegments == null || userSegments.length === 0) {
+      return ['rust']
+    }
+    return userSegments
+  }
+
+  getGpuiCrateName(): string {
+    return this.config.gpui?.crateName ?? 'nitrogen_generated'
+  }
+
   /**
    * Get the autolinking configuration of all HybridObjects.
    * Those will be generated and default-constructed.

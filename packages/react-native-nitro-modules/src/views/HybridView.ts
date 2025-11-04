@@ -6,6 +6,7 @@ import type { HybridObject } from '../HybridObject'
 export interface ViewPlatformSpec {
   ios?: 'swift'
   android?: 'kotlin'
+  gpui?: 'rust'
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { Language, Platform } from '../getPlatformSpecs.js'
+import { allPlatforms, type Language, type Platform } from '../getPlatformSpecs.js'
 import type { Type } from './types/Type.js'
 
 /**
@@ -72,7 +72,10 @@ export interface SourceImport {
 type GroupedFiles = Record<SourceFile['platform'], SourceFile[]>
 
 export function groupByPlatform(files: SourceFile[]): GroupedFiles {
-  const result: GroupedFiles = { shared: [], ios: [], android: [] }
+  const result = { shared: [] as SourceFile[] } as GroupedFiles
+  for (const platform of allPlatforms) {
+    result[platform] = []
+  }
   for (const file of files) {
     result[file.platform].push(file)
   }

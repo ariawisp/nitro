@@ -4,13 +4,14 @@ import { Node, Symbol } from 'ts-morph'
 import { getBaseTypes } from './utils.js'
 
 const platformLanguages = {
-  ios: ['swift', 'c++', 'rust'],
-  android: ['kotlin', 'c++', 'rust'],
+  ios: ['swift', 'c++'],
+  android: ['kotlin', 'c++'],
+  gpui: ['rust'],
 } as const
 
 export type Platform = keyof typeof platformLanguages
 export type Language = (typeof platformLanguages)[Platform][number]
-const allPlatforms = Object.keys(platformLanguages) as Platform[]
+export const allPlatforms = Object.keys(platformLanguages) as Platform[]
 const allLanguages = Object.values(platformLanguages).flatMap((l) => l)
 
 function isValidLanguage(language: string | undefined): language is Language {

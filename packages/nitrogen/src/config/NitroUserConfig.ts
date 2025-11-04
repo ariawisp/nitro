@@ -71,6 +71,35 @@ export const NitroUserConfigSchema = z.object({
       .refine(isNotReservedKeyword, isReservedKeywordError),
   }),
   /**
+   * GPUI specific options.
+   */
+  gpui: z
+    .object({
+      /**
+       * Optional name for the generated Rust crate scaffold.
+       * @example `nitrogen_generated`
+       */
+      crateName: z
+        .string()
+        .regex(safeNamePattern)
+        .refine(isNotReservedKeyword, isReservedKeywordError)
+        .optional(),
+      /**
+       * Optional list of path segments appended after `gpui` in the output directory.
+       * Allows routing generated artifacts into a custom folder hierarchy.
+       * @example `['rust']`
+       */
+      outputSubdirectory: z
+        .array(
+          z
+            .string()
+            .regex(safeNamePattern)
+            .refine(isNotReservedKeyword, isReservedKeywordError)
+        )
+        .optional(),
+    })
+    .optional(),
+  /**
    * Configures the code that gets generated for autolinking (registering)
    * Hybrid Object constructors.
    *

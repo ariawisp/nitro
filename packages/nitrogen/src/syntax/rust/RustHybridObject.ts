@@ -11,6 +11,7 @@ import { FunctionType } from '../types/FunctionType.js'
 import { StructType } from '../types/StructType.js'
 import { NamedWrappingType } from '../types/NamedWrappingType.js'
 import type { NamedType, Type } from '../types/Type.js'
+import { NitroConfig } from '../../config/NitroConfig.js'
 
 /**
  * Converts a camelCase or PascalCase string to snake_case
@@ -102,7 +103,7 @@ function getUnderlyingType(named: NamedType): Type {
 
 function registerRustModule(file: SourceFile): void {
   if (file.language !== 'rust') return
-  if (file.platform !== 'shared') return
+  if (file.platform !== 'gpui') return
   if (!file.name.endsWith('.rs')) return
   if (file.subdirectory[0] === 'crate') return
   const segments = [...file.subdirectory, file.name]
@@ -112,15 +113,16 @@ function registerRustModule(file: SourceFile): void {
   rustModuleRegistry.add(relativePath)
 }
 
-export function createRustCrateScaffold(): SourceFile[] {
-  if (rustModuleRegistry.size === 0) return []
-
-  const modules = Array.from(rustModuleRegistry).sort()
+function createCrateFiles(
+  modules: string[],
+  crateName: string
+): SourceFile[] {
+  if (modules.length === 0) return []
 
   const cargoToml = `${createFileMetadataString('Cargo.toml', '#')}
 
 [package]
-name = "nitrogen_generated"
+name = "${crateName}"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -148,20 +150,27 @@ ${includeStatements}
 
   return [
     {
-      platform: 'shared',
+      platform: 'gpui',
       language: 'rust',
       subdirectory: ['crate'],
       name: 'Cargo.toml',
       content: cargoToml,
     },
     {
-      platform: 'shared',
+      platform: 'gpui',
       language: 'rust',
       subdirectory: ['crate', 'src'],
       name: 'lib.rs',
       content: libRs,
     },
   ]
+}
+
+export function createRustCrateScaffold(): SourceFile[] {
+  const modules = Array.from(rustModuleRegistry).sort()
+  if (modules.length === 0) return []
+  const crateName = NitroConfig.current.getGpuiCrateName()
+  return createCrateFiles(modules, crateName)
 }
 
 /**
@@ -171,8 +180,19 @@ ${includeStatements}
  * - Enum types from union types
  * - Event structs from callback signatures
  */
-export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
+export function createRustHybridObject(
+  spec: HybridObjectSpec,
+  targetPlatform: 'gpui' = 'gpui'
+): SourceFile[] {
+  if (targetPlatform !== 'gpui') {
+    throw new Error('Rust generation is only supported for the GPUI platform.')
+  }
   const files: SourceFile[] = []
+  const pushFile = (file: SourceFile): void => {
+    const gpuiFile = { ...file, platform: 'gpui' as const }
+    registerRustModule(gpuiFile)
+    files.push(gpuiFile)
+  }
 
   // Generate props struct if there are properties
   const nonCallbackProps = spec.properties.filter(
@@ -180,8 +200,7 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
   )
   if (nonCallbackProps.length > 0) {
     const propsFile = generatePropsStruct(spec, nonCallbackProps)
-    registerRustModule(propsFile)
-    files.push(propsFile)
+    pushFile(propsFile)
   }
 
   // Generate enums from union/variant types
@@ -189,8 +208,7 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
   for (const enumType of enumTypes) {
     const enumFile = generateEnum(enumType)
     if (enumFile != null) {
-      registerRustModule(enumFile)
-      files.push(enumFile)
+      pushFile(enumFile)
     }
   }
 
@@ -200,8 +218,7 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
   )
   for (const callback of callbackProps) {
     const eventFile = generateEventStruct(spec, callback)
-    registerRustModule(eventFile)
-    files.push(eventFile)
+    pushFile(eventFile)
   }
 
   const hybridFile = generateHybridObjectImpl(
@@ -210,8 +227,7 @@ export function createRustHybridObject(spec: HybridObjectSpec): SourceFile[] {
     callbackProps,
     spec.methods
   )
-  registerRustModule(hybridFile)
-  files.push(hybridFile)
+  pushFile(hybridFile)
 
   return files
 }

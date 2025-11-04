@@ -92,6 +92,8 @@ export async function runNitrogen({
   const usedPlatforms: Platform[] = []
   const filesAfter: string[] = []
   const writtenFiles: SourceFile[] = []
+  const gpuiOutputSegments = NitroConfig.current.getGpuiOutputSubdirectory()
+  const gpuiOutputRoots = new Set<string>()
 
   for (const sourceFile of project.getSourceFiles()) {
     Logger.info(`⏳  Parsing ${sourceFile.getBaseName()}...`)
@@ -135,7 +137,11 @@ export async function runNitrogen({
         let allFiles = platforms.flatMap((platform) => {
           usedPlatforms.push(platform)
           const language = platformSpec[platform]!
-          return generatePlatformFiles(declaration.getType(), language)
+          return generatePlatformFiles(
+            declaration.getType(),
+            language,
+            platform
+          )
         })
         allFiles = deduplicateFiles(allFiles)
         // Group the files by platform ({ ios: [], android: [], shared: [] })
@@ -159,11 +165,21 @@ export async function runNitrogen({
           )
           // Write the actual files for this specific platform.
           for (const file of files) {
-            const basePath = path.join(
-              outputDirectory,
-              String(file.platform),
-              String(file.language)
-            )
+            const basePath =
+              file.platform === 'gpui'
+                ? path.join(
+                    outputDirectory,
+                    'gpui',
+                    ...gpuiOutputSegments
+                  )
+                : path.join(
+                    outputDirectory,
+                    String(file.platform),
+                    String(file.language)
+                  )
+            if (file.platform === 'gpui') {
+              gpuiOutputRoots.add(basePath)
+            }
             const actualPath = await writeFile(basePath, file)
             filesAfter.push(actualPath)
             writtenFiles.push(file)
@@ -192,12 +208,26 @@ export async function runNitrogen({
     }
   }
 
+  if (gpuiOutputRoots.size > 0) {
+    for (const root of gpuiOutputRoots) {
+      Logger.info(
+        `🧩  GPUI Rust output generated under ${chalk.underline(prettifyDirectory(root))}`
+      )
+    }
+  }
+
   // Autolinking
   const rustCrateFiles = createRustCrateScaffold()
   if (rustCrateFiles.length > 0) {
     Logger.info('🦀  Preparing Rust crate scaffold...')
     for (const file of rustCrateFiles) {
-      const basePath = path.join(outputDirectory, file.platform, file.language)
+      const basePath =
+        file.platform === 'gpui'
+          ? path.join(outputDirectory, 'gpui', ...gpuiOutputSegments)
+          : path.join(outputDirectory, file.platform, file.language)
+      if (file.platform === 'gpui') {
+        gpuiOutputRoots.add(basePath)
+      }
       const actualPath = await writeFile(basePath, file)
       filesAfter.push(actualPath)
       writtenFiles.push(file)
