@@ -203,6 +203,7 @@ function generateRustFiles(
   if (platform !== 'gpui') {
     throw new Error('Rust generation is only supported for the GPUI platform.')
   }
+  const cppBaseFiles = generateCppFiles(spec)
   const rustFiles = createRustHybridObject(spec, 'gpui')
-  return rustFiles
+  return [...cppBaseFiles, ...rustFiles]
 }

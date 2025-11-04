@@ -272,6 +272,9 @@ export async function runNitrogen({
   }
 
   const uniquePlatforms = Array.from(new Set(usedPlatforms))
+  Logger.debug(
+    `Used platforms for run: [${uniquePlatforms.join(', ')}]`
+  )
 
   return {
     generatedFiles: filesAfter,

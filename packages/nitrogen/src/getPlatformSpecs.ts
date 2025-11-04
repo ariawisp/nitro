@@ -2,6 +2,7 @@ import type { PlatformSpec } from 'react-native-nitro-modules'
 import type { InterfaceDeclaration, Type, TypeAliasDeclaration } from 'ts-morph'
 import { Node, Symbol } from 'ts-morph'
 import { getBaseTypes } from './utils.js'
+import { Logger } from './Logger.js'
 
 const platformLanguages = {
   ios: ['swift', 'c++'],
@@ -55,6 +56,16 @@ function getPlatformSpec(typeName: string, platformSpecs: Type): PlatformSpec {
   for (const property of properties) {
     // Property name (ios, android)
     const platformName = property.getName()
+    const valueDeclaration = property.getValueDeclaration()
+    const typeText = valueDeclaration?.getType().getText()
+    Logger.debug(
+      `Platform ${platformName} has type ${typeText ?? 'unknown'} and flags ${property.getFlags()}`
+    )
+    Logger.debug(
+      `Inspecting platform property ${platformName} with declarations: ${property
+        .getDeclarations()
+        .map((d) => d.getKindName())}`
+    )
     if (!isValidPlatform(platformName)) {
       throw new Error(
         `${typeName} does not properly extend HybridObject<T> - "${platformName}" is not a valid Platform! ` +
@@ -65,6 +76,12 @@ function getPlatformSpec(typeName: string, platformSpecs: Type): PlatformSpec {
 
     // Value (swift, kotlin, c++)
     const languageValue = getLiteralValue(property)
+    if (languageValue == null) {
+      Logger.debug(
+        `Skipping platform ${platform} because no literal language value was provided.`
+      )
+      continue
+    }
     if (!isValidLanguage(languageValue)) {
       const allowed = platformLanguages[platform] as readonly Language[]
       throw new Error(
