@@ -103,11 +103,15 @@ async function runNitrogenCommand(
   const start = performance.now()
 
   // 2. Run Nitrogen
-  const { generatedFiles, generatedSpecsCount, targetSpecsCount } =
-    await runNitrogen({
-      baseDirectory: baseDirectory,
-      outputDirectory: outputDirectory,
-    })
+  const {
+    generatedFiles,
+    generatedSpecsCount,
+    targetSpecsCount,
+    usedPlatforms,
+  } = await runNitrogen({
+    baseDirectory: baseDirectory,
+    outputDirectory: outputDirectory,
+  })
 
   const end = performance.now()
   const timeS = ((end - start) / 1000).toFixed(1)
@@ -133,9 +137,29 @@ async function runNitrogenCommand(
       text = `Added ${addedFiles.length} file${as} and removed ${removedFiles.length} file${rs}`
     }
 
-    console.log(
-      `‼️   ${text} - ${chalk.bold('you need to run `pod install`/sync gradle to update files!')}`
-    )
+    const uniquePlatforms = new Set(usedPlatforms)
+    const hasMobilePlatform =
+      uniquePlatforms.has('ios') || uniquePlatforms.has('android')
+    const gpuiOnly =
+      uniquePlatforms.size > 0 &&
+      uniquePlatforms.has('gpui') &&
+      !hasMobilePlatform
+
+    if (gpuiOnly) {
+      console.log(
+        `‼️   ${text} - ${chalk.bold(
+          'rerun your GPUI build so the Rust crate picks up the new bindings.'
+        )}`
+      )
+    } else if (hasMobilePlatform) {
+      console.log(
+        `‼️   ${text} - ${chalk.bold(
+          'run `pod install` and/or sync Gradle to update native projects.'
+        )}`
+      )
+    } else {
+      console.log(`‼️   ${text}`)
+    }
   }
   const promises = removedFiles.map(async (file) => {
     const stat = await fs.stat(file)

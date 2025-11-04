@@ -37,6 +37,7 @@ interface NitrogenResult {
   generatedFiles: string[]
   targetSpecsCount: number
   generatedSpecsCount: number
+  usedPlatforms: Platform[]
 }
 
 export async function runNitrogen({
@@ -234,8 +235,6 @@ export async function runNitrogen({
     }
   }
 
-  Logger.info(`⛓️   Setting up build configs for autolinking...`)
-
   const autolinkingFiles: Autolinking[] = []
 
   if (usedPlatforms.includes('ios')) {
@@ -245,17 +244,21 @@ export async function runNitrogen({
     autolinkingFiles.push(createAndroidAutolinking(writtenFiles))
   }
 
-  for (const autolinking of autolinkingFiles) {
-    Logger.info(
-      `    Creating autolinking build setup for ${chalk.dim(autolinking.platform)}...`
-    )
-    for (const file of autolinking.sourceFiles) {
-      const basePath = path.join(outputDirectory, file.platform)
-      const actualPath = await writeFile(
-        basePath,
-        file as unknown as SourceFile
+  if (autolinkingFiles.length > 0) {
+    Logger.info(`⛓️   Setting up build configs for autolinking...`)
+
+    for (const autolinking of autolinkingFiles) {
+      Logger.info(
+        `    Creating autolinking build setup for ${chalk.dim(autolinking.platform)}...`
       )
-      filesAfter.push(actualPath)
+      for (const file of autolinking.sourceFiles) {
+        const basePath = path.join(outputDirectory, file.platform)
+        const actualPath = await writeFile(
+          basePath,
+          file as unknown as SourceFile
+        )
+        filesAfter.push(actualPath)
+      }
     }
   }
 
@@ -268,9 +271,12 @@ export async function runNitrogen({
     Logger.error(`❌  Failed to write ${chalk.dim(`.gitattributes`)}!`)
   }
 
+  const uniquePlatforms = Array.from(new Set(usedPlatforms))
+
   return {
     generatedFiles: filesAfter,
     targetSpecsCount: targetSpecs,
     generatedSpecsCount: generatedSpecs,
+    usedPlatforms: uniquePlatforms,
   }
 }
